@@ -38,7 +38,7 @@ int main() {
     printf("Motor de búsqueda multi-criterio iniciando...\n");
     signal(SIGINT, cleanup);
 
-    load_full_index("jobs.idx");
+    load_full_index("dist/jobs.idx");
     printf("Índice completo cargado en memoria.\n");
 
     umask(0);

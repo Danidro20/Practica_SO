@@ -55,7 +55,7 @@ int main() {
     fclose(file_csv);
     printf("El archivo CSV ha sido procesado. Construyendo el índice...\n");
 
-    write_index_file("jobs.idx");
+    write_index_file("dist/jobs.idx");
     printf("Archivo de índice 'jobs.idx' creado exitosamente.\n");
 
     free_hash_table();
