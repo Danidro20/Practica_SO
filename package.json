@@ -1,8 +1,14 @@
 {
    "scripts": {
-      "index": "gcc -o index index.c -lzstd && mkdir -p dist && mv -f index dist/index && ./dist/index",
-      "engine": "gcc -o engine engine.c -lzstd && mkdir -p dist && mv -f engine dist/engine && ./dist/engine",
-      "ui": "gcc -o ui ui.c && mkdir -p dist && mv -f ui dist/ui && ./dist/ui"
+      "build:index": "gcc -o index index.c utils.c -lzstd -lm && mkdir -p dist && mv -f index dist/index",
+      "index": "yarn build:index && ./dist/index",
+      "build:engine": "gcc -o engine engine.c utils.c -lzstd -lm && mkdir -p dist && mv -f engine dist/engine",
+      "engine": "yarn build:engine && ./dist/engine",
+      "build:ui": "gcc -o ui ui.c && mkdir -p dist && mv -f ui dist/ui",
+      "ui": "yarn build:ui && ./dist/ui",
+      "build:main": "gcc -o main main.c utils.c -lzstd -lm && mkdir -p dist && mv -f main dist/main",
+      "build": "yarn build:index && yarn build:engine && yarn build:ui && yarn build:main",
+      "start": "yarn build && ./dist/main"
    },
    "packageManager": "yarn@4.9.2"
 }
