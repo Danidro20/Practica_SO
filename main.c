@@ -65,8 +65,8 @@ int main()
 
     if (engine_pid == 0)
     {
-        // Proceso hijo - motor de búsqueda
-        execlp("./dist/engine", "engine", (char *)NULL);
+        // Proceso hijo - motor de búsqueda, sin modo depuración
+        execlp("./dist/engine", "engine", "-n", (char *)NULL);
         perror("Error al iniciar el motor");
         exit(1);
     }

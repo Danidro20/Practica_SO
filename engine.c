@@ -12,12 +12,16 @@
 #include <ctype.h>
 #include <signal.h>
 #include <stdint.h>
+#include <getopt.h>
 #include "utils.h"
 
 // --- Definiciones ---
 #define MAX_SKILL_LENGTH 256
 #define INITIAL_OFFSETS_CAPACITY 1000
 #define TABLE_SIZE 1024  // Tamaño de la tabla hash
+
+// Variable global para el modo depuración (activado por defecto)
+int debug_mode = 1;
 
 // Estructura para almacenar una habilidad con sus offsets
 typedef struct
@@ -93,7 +97,7 @@ void free_dictionary()
 }
 
 // Carga el índice comprimido en memoria
-void load_compressed_index(const char *filename)
+void load_compressed_index(const char *filename, int debug_mode)
 {
     printf("Cargando índice comprimido...\n");
 
@@ -223,13 +227,23 @@ void load_compressed_index(const char *filename)
             goto cleanup_error;
         }
         skill_dict.entries[i].skill[skill_len] = '\0';
+        
+        // Eliminar comillas dobles al inicio y final si existen
+        char *skill = skill_dict.entries[i].skill;
+        size_t len = strlen(skill);
+        if (len >= 2 && skill[0] == '"' && skill[len-1] == '"') {
+            // Mover el contenido un carácter a la izquierda
+            memmove(skill, skill + 1, len - 2);
+            skill[len-2] = '\0';
+        }
 
         // Mostrar información de muestra para entradas seleccionadas
-        for (int s = 0; s < 3 && s < num_entries; s++) {
-            if (i == sample_indices[s]) {
-                printf("\n--- Entrada de muestra %d (índice %zu) ---\n", s+1, i);
-                printf("  Habilidad: '%s' (longitud: %u)\n", 
-                       skill_dict.entries[i].skill, skill_len);
+        if (debug_mode) {
+            for (int s = 0; s < 3 && s < num_entries; s++) {
+                if (i == sample_indices[s]) {
+                    printf("\n--- Entrada de muestra %d (índice %zu) ---\n", s+1, i);
+                    printf("  Habilidad: '%s' (longitud: %u)\n", skill_dict.entries[i].skill, skill_len);
+                }
             }
         }
 
@@ -259,16 +273,18 @@ void load_compressed_index(const char *filename)
             }
 
             // Mostrar primeros 5 offsets para las entradas de muestra
-            for (int s = 0; s < 3 && s < num_entries; s++) {
-                if (i == sample_indices[s]) {
-                    printf("  Primeros 5 offsets: ");
-                    int max_show = num_offsets > 5 ? 5 : num_offsets;
-                    for (int j = 0; j < max_show; j++) {
-                        printf("%u ", skill_dict.entries[i].offsets[j]);
+            if (debug_mode) {
+                for (int s = 0; s < 3 && s < num_entries; s++) {
+                    if (i == sample_indices[s]) {
+                        printf("  Primeros 5 offsets: ");
+                        int max_show = num_offsets > 5 ? 5 : num_offsets;
+                        for (int j = 0; j < max_show; j++) {
+                            printf("%u ", skill_dict.entries[i].offsets[j]);
+                        }
+                        if (num_offsets > 5) printf("...");
+                        printf("\n  Total offsets: %u\n", num_offsets);
+                        printf("------------------------\n");
                     }
-                    if (num_offsets > 5) printf("...");
-                    printf("\n  Total offsets: %u\n", num_offsets);
-                    printf("------------------------\n");
                 }
             }
 
@@ -294,20 +310,96 @@ cleanup_error:
     exit(EXIT_FAILURE);
 }
 
+// Función auxiliar para comparación insensible a mayúsculas/minúsculas
+static int str_icmp(const char *s1, const char *s2) {
+    int c1, c2;
+    do {
+        c1 = tolower((unsigned char)*s1++);
+        c2 = tolower((unsigned char)*s2++);
+    } while (c1 == c2 && c1 != '\0');
+    return c1 - c2;
+}
+
+// Función auxiliar para verificar si una cadena contiene otra (insensible a mayúsculas/minúsculas)
+// y maneja términos múltiples (separados por comas) en el haystack
+static int str_icontains_terms(const char *haystack, const char *needle) {
+    if (!*needle) return 1; // Cadena vacía siempre coincide
+    
+    // Hacer una copia del needle para no modificar el original
+    char needle_copy[256];
+    strncpy(needle_copy, needle, sizeof(needle_copy) - 1);
+    needle_copy[sizeof(needle_copy) - 1] = '\0';
+    
+    // Hacer una copia del haystack para no modificar el original
+    char haystack_copy[256];
+    strncpy(haystack_copy, haystack, sizeof(haystack_copy) - 1);
+    haystack_copy[sizeof(haystack_copy) - 1] = '\0';
+    
+    // Buscar coincidencia directa (caso más rápido)
+    char *match = strcasestr(haystack_copy, needle_copy);
+    if (match) {
+        // Verificar que sea un término completo (rodeado por comas o al inicio/fin)
+        if ((match == haystack_copy || *(match-1) == ',' || isspace(*(match-1))) && 
+            (*(match + strlen(needle_copy)) == ',' || 
+             *(match + strlen(needle_copy)) == '\0' || 
+             isspace(*(match + strlen(needle_copy))))) {
+            return 1;
+        }
+    }
+    
+    // Si no hay coincidencia directa, buscar en cada término individual
+    char *term = strtok(haystack_copy, ",");
+    while (term != NULL) {
+        // Eliminar espacios en blanco al inicio/fin del término
+        while (isspace((unsigned char)*term)) term++;
+        char *end = term + strlen(term) - 1;
+        while (end > term && isspace((unsigned char)*end)) end--;
+        *(end + 1) = '\0';
+        
+        // Comparar términos (insensible a mayúsculas/minúsculas)
+        if (strcasecmp(term, needle_copy) == 0) {
+            return 1;
+        }
+        
+        term = strtok(NULL, ",");
+    }
+    
+    return 0;
+}
+
 // Busca una habilidad en el diccionario y devuelve sus offsets
-int find_skill_offsets(const char *skill, uint32_t **offsets, size_t *count)
-{
-    // Búsqueda lineal (podría mejorarse con búsqueda binaria si el diccionario está ordenado)
-    for (size_t i = 0; i < skill_dict.size; i++)
-    {
-        if (strcmp(skill_dict.entries[i].skill, skill) == 0)
-        {
+// Modo de búsqueda:
+// 0: exacta (case sensitive)
+// 1: insensible a mayúsculas/minúsculas
+// 2: búsqueda parcial (contiene)
+int find_skill_offsets_ex(const char *skill, uint32_t **offsets, size_t *count, int mode) {
+    for (size_t i = 0; i < skill_dict.size; i++) {
+        int match = 0;
+        
+        switch (mode) {
+            case 0: // exacta
+                match = (strcmp(skill_dict.entries[i].skill, skill) == 0);
+                break;
+            case 1: // insensible a mayúsculas/minúsculas
+                match = (str_icmp(skill_dict.entries[i].skill, skill) == 0);
+                break;
+            case 2: // búsqueda en términos múltiples
+                match = str_icontains_terms(skill_dict.entries[i].skill, skill);
+                break;
+        }
+        
+        if (match) {
             *offsets = skill_dict.entries[i].offsets;
             *count = skill_dict.entries[i].count;
             return 1; // Encontrado
         }
     }
     return 0; // No encontrado
+}
+
+// Versión original para compatibilidad
+int find_skill_offsets(const char *skill, uint32_t **offsets, size_t *count) {
+    return find_skill_offsets_ex(skill, offsets, count, 0); // Modo exacto por defecto
 }
 
 // Encuentra la intersección de dos listas ordenadas de offsets
@@ -397,16 +489,34 @@ void search_and_respond(int query_fd, int result_fd)
         uint32_t *skill_offsets;
         size_t skill_count;
 
-        // Buscar la habilidad actual
-        if (!find_skill_offsets(criteria[i], &skill_offsets, &skill_count))
+        // Buscar la habilidad actual con búsqueda flexible
+        // Modo 0: exacto (case sensitive)
+        // Modo 1: insensible a mayúsculas/minúsculas
+        // Modo 2: búsqueda parcial (contiene)
+        int search_mode = 2; // Por defecto, búsqueda parcial
+        
+        // Si el criterio está entre comillas, usar búsqueda exacta
+        if (criteria[i][0] == '"' && criteria[i][strlen(criteria[i])-1] == '"') {
+            // Eliminar comillas
+            char *trimmed = strdup(criteria[i] + 1);
+            trimmed[strlen(trimmed)-1] = '\0';
+            int found = find_skill_offsets_ex(trimmed, &skill_offsets, &skill_count, 0);
+            free(trimmed);
+            if (found) goto found_skill;
+        }
+        
+        // Si no se encontró con búsqueda exacta, intentar con búsqueda flexible
+        if (!find_skill_offsets_ex(criteria[i], &skill_offsets, &skill_count, search_mode))
         {
-            // Habilidad no encontrada, la intersección es vacía
-            if (current_result)
-                free(current_result);
+            // No se encontró esta habilidad, limpiar resultados anteriores
+            if (current_result) free(current_result);
             current_result = NULL;
             current_count = 0;
             break;
         }
+        
+        found_skill:
+        // Continuar con el procesamiento normal...
 
         if (first_criterion)
         {
@@ -598,9 +708,27 @@ void cleanup(int signum)
 }
 
 // --- Implementación del Motor ---
-int main()
+int main(int argc, char *argv[])
 {
-    printf("Motor de búsqueda multi-criterio optimizado iniciando...\n");
+    // Procesar argumentos de línea de comandos
+    int opt;
+    while ((opt = getopt(argc, argv, "n")) != -1) {
+        switch (opt) {
+            case 'n':
+                debug_mode = 0;  // Desactivar modo debug
+                break;
+            default:
+                fprintf(stderr, "Uso: %s [-n]\n", argv[0]);
+                fprintf(stderr, "  -n  Desactiva el modo depuración (ejecuta todas las comprobaciones)\n");
+                return EXIT_FAILURE;
+        }
+    }
+
+    if (debug_mode) {
+        printf("Modo depuración activado (por defecto). Algunas comprobaciones serán omitidas.\n");
+        printf("Motor de búsqueda multi-criterio optimizado iniciando...\n");
+    }
+    
     signal(SIGINT, cleanup);
 
     // Inicializar diccionario
@@ -608,14 +736,24 @@ int main()
     skill_dict.size = 0;
 
     // Cargar el índice comprimido
-    load_compressed_index("dist/jobs.idx.zst");
-    printf("Índice optimizado cargado en memoria. %zu habilidades indexadas.\n", skill_dict.size);
+    load_compressed_index("dist/jobs.idx.zst", debug_mode);
+
+    if (debug_mode) {
+        printf("Índice optimizado cargado en memoria. %zu habilidades indexadas.\n", skill_dict.size);
+    }
 
     // Crear tuberías para comunicación
     umask(0);
-    mkfifo(QUERY_PIPE, 0666);
-    mkfifo(RESULT_PIPE, 0666);
-    printf("Tuberías creadas. Esperando peticiones...\n");
+    if (!debug_mode || access(QUERY_PIPE, F_OK) != 0) {
+        mkfifo(QUERY_PIPE, 0666);
+    }
+    if (!debug_mode || access(RESULT_PIPE, F_OK) != 0) {
+        mkfifo(RESULT_PIPE, 0666);
+    }
+
+    if (debug_mode) {
+        printf("Tuberías creadas. Esperando peticiones...\n");
+    }
 
     while (1)
     {

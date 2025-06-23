@@ -2,6 +2,15 @@
 
 Este proyecto implementa un sistema de búsqueda optimizado que reduce significativamente el tamaño del índice utilizando técnicas avanzadas de compresión y estructuras de datos eficientes.
 
+## Uso
+
+```bash
+yarn start
+```
+
+Usa el archivo habilidades.csv como referencia para tus busquedas
+
+
 ## Algoritmo de Indexado
 
 El proceso de indexado consta de varias fases que transforman los datos CSV en un índice altamente optimizado:

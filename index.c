@@ -564,8 +564,19 @@ int main()
                 strncpy(skill_buffer, start, skill_len);
                 skill_buffer[skill_len] = '\0';
 
+                // Eliminar comillas dobles al inicio y final si existen
+                char *skill = skill_buffer;
+                size_t len = strlen(skill);
+                if (len >= 2 && skill[0] == '"' && skill[len-1] == '"') {
+                    // Quitar comillas dobles
+                    skill[len-1] = '\0';
+                    skill++;
+                }
+
                 // Añadir la habilidad al diccionario con el offset actual
-                dict_add_offset(&skill_dict, skill_buffer, line_start);
+                if (*skill != '\0') {  // Solo añadir si no está vacío después de quitar comillas
+                    dict_add_offset(&skill_dict, skill, line_start);
+                }
             }
 
             if (*current == ',')
