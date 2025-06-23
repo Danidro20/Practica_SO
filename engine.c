@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -10,6 +11,7 @@
 #include <time.h>
 #include <ctype.h>
 #include <signal.h>
+#include <stdint.h>
 #include "utils.h"
 
 // --- Definiciones ---
@@ -55,51 +57,6 @@ HashNode* hashTable[TABLE_SIZE];  // Tabla hash
 #define QUERY_PIPE "/tmp/job_query_pipe"
 #define RESULT_PIPE "/tmp/job_result_pipe"
 
-// --- Prototipos ---
-void load_compressed_index(const char *filename);
-void search_and_respond(int query_fd, int result_fd);
-void cleanup(int signum);
-void free_dictionary();
-int find_skill_offsets(const char *skill, uint32_t **offsets, size_t *count);
-
-// --- Implementación del Motor ---
-int main()
-{
-    printf("Motor de búsqueda multi-criterio optimizado iniciando...\n");
-    signal(SIGINT, cleanup);
-
-    // Inicializar diccionario
-    skill_dict.entries = NULL;
-    skill_dict.size = 0;
-
-    // Cargar el índice comprimido
-    load_compressed_index("dist/jobs.idx.zst");
-    printf("Índice optimizado cargado en memoria. %zu habilidades indexadas.\n", skill_dict.size);
-
-    // Crear tuberías para comunicación
-    umask(0);
-    mkfifo(QUERY_PIPE, 0666);
-    mkfifo(RESULT_PIPE, 0666);
-    printf("Tuberías creadas. Esperando peticiones...\n");
-
-    while (1)
-    {
-        int query_fd = open(QUERY_PIPE, O_RDONLY);
-        int result_fd = open(RESULT_PIPE, O_WRONLY);
-        if (query_fd == -1 || result_fd == -1)
-        {
-            perror("Error al abrir las tuberías");
-            cleanup(0);
-            exit(EXIT_FAILURE);
-        }
-        search_and_respond(query_fd, result_fd);
-        close(query_fd);
-        close(result_fd);
-    }
-
-    return 0;
-}
-
 // Función para leer un entero con codificación variable
 static uint32_t read_varint(FILE *f)
 {
@@ -119,6 +76,20 @@ static uint32_t read_varint(FILE *f)
     } while (byte & 0x80);
 
     return result;
+}
+
+/**
+ * @brief Libera la memoria del diccionario
+ */
+void free_dictionary()
+{
+    for (size_t i = 0; i < skill_dict.size; i++)
+    {
+        free(skill_dict.entries[i].offsets);
+    }
+    free(skill_dict.entries);
+    skill_dict.entries = NULL;
+    skill_dict.size = 0;
 }
 
 // Carga el índice comprimido en memoria
@@ -225,12 +196,21 @@ void load_compressed_index(const char *filename)
     }
     skill_dict.size = num_entries;
 
+    printf("Cargando %zu entradas del diccionario...\n", num_entries);
+    
+    // Seleccionar 3 índices aleatorios para mostrar
+    srand(time(NULL));
+    size_t sample_indices[3];
+    for (int s = 0; s < 3 && s < num_entries; s++) {
+        sample_indices[s] = rand() % num_entries;
+    }
+
     // Leer cada entrada
     for (size_t i = 0; i < num_entries; i++)
     {
-        // Leer longitud de la habilidad
-        uint8_t skill_len;
-        if (fread(&skill_len, sizeof(uint8_t), 1, mem) != 1)
+        // Leer longitud de la habilidad (ahora usamos uint16_t)
+        uint16_t skill_len;
+        if (fread(&skill_len, sizeof(uint16_t), 1, mem) != 1)
         {
             fprintf(stderr, "Error al leer longitud de habilidad %zu\n", i);
             goto cleanup_error;
@@ -244,8 +224,22 @@ void load_compressed_index(const char *filename)
         }
         skill_dict.entries[i].skill[skill_len] = '\0';
 
-        // Leer número de offsets
-        uint32_t num_offsets = read_varint(mem);
+        // Mostrar información de muestra para entradas seleccionadas
+        for (int s = 0; s < 3 && s < num_entries; s++) {
+            if (i == sample_indices[s]) {
+                printf("\n--- Entrada de muestra %d (índice %zu) ---\n", s+1, i);
+                printf("  Habilidad: '%s' (longitud: %u)\n", 
+                       skill_dict.entries[i].skill, skill_len);
+            }
+        }
+
+        // Leer número de offsets (ahora usamos uint16_t)
+        uint16_t num_offsets;
+        if (fread(&num_offsets, sizeof(uint16_t), 1, mem) != 1)
+        {
+            fprintf(stderr, "Error al leer número de offsets para habilidad %zu\n", i);
+            goto cleanup_error;
+        }
 
         // Reservar memoria para los offsets
         skill_dict.entries[i].count = num_offsets;
@@ -256,13 +250,36 @@ void load_compressed_index(const char *filename)
             goto cleanup_error;
         }
 
-        // Leer offsets (delta encoding)
-        uint32_t prev = 0;
-        for (uint32_t j = 0; j < num_offsets; j++)
-        {
-            uint32_t delta = read_varint(mem);
-            prev += delta;
-            skill_dict.entries[i].offsets[j] = prev;
+        if (num_offsets > 0) {
+            // Leer los deltas (ahora están en formato binario completo, no en varint)
+            if (fread(skill_dict.entries[i].offsets, sizeof(uint32_t), num_offsets, mem) != num_offsets)
+            {
+                fprintf(stderr, "Error al leer los offsets para habilidad %zu\n", i);
+                goto cleanup_error;
+            }
+
+            // Mostrar primeros 5 offsets para las entradas de muestra
+            for (int s = 0; s < 3 && s < num_entries; s++) {
+                if (i == sample_indices[s]) {
+                    printf("  Primeros 5 offsets: ");
+                    int max_show = num_offsets > 5 ? 5 : num_offsets;
+                    for (int j = 0; j < max_show; j++) {
+                        printf("%u ", skill_dict.entries[i].offsets[j]);
+                    }
+                    if (num_offsets > 5) printf("...");
+                    printf("\n  Total offsets: %u\n", num_offsets);
+                    printf("------------------------\n");
+                }
+            }
+
+            // Aplicar el delta decoding
+            uint32_t prev = skill_dict.entries[i].offsets[0];
+            for (uint32_t j = 1; j < num_offsets; j++)
+            {
+                uint32_t current = skill_dict.entries[i].offsets[j];
+                skill_dict.entries[i].offsets[j] = prev + current;
+                prev = skill_dict.entries[i].offsets[j];
+            }
         }
     }
 
@@ -566,20 +583,6 @@ void free_full_hash_table()
 }
 
 /**
- * @brief Libera la memoria del diccionario
- */
-void free_dictionary()
-{
-    for (size_t i = 0; i < skill_dict.size; i++)
-    {
-        free(skill_dict.entries[i].offsets);
-    }
-    free(skill_dict.entries);
-    skill_dict.entries = NULL;
-    skill_dict.size = 0;
-}
-
-/**
  * @brief Limpia los recursos (tuberías y memoria) antes de salir.
  */
 void cleanup(int signum)
@@ -592,4 +595,42 @@ void cleanup(int signum)
     unlink(RESULT_PIPE);
     printf("Recursos liberados. Adiós.\n");
     exit(0);
+}
+
+// --- Implementación del Motor ---
+int main()
+{
+    printf("Motor de búsqueda multi-criterio optimizado iniciando...\n");
+    signal(SIGINT, cleanup);
+
+    // Inicializar diccionario
+    skill_dict.entries = NULL;
+    skill_dict.size = 0;
+
+    // Cargar el índice comprimido
+    load_compressed_index("dist/jobs.idx.zst");
+    printf("Índice optimizado cargado en memoria. %zu habilidades indexadas.\n", skill_dict.size);
+
+    // Crear tuberías para comunicación
+    umask(0);
+    mkfifo(QUERY_PIPE, 0666);
+    mkfifo(RESULT_PIPE, 0666);
+    printf("Tuberías creadas. Esperando peticiones...\n");
+
+    while (1)
+    {
+        int query_fd = open(QUERY_PIPE, O_RDONLY);
+        int result_fd = open(RESULT_PIPE, O_WRONLY);
+        if (query_fd == -1 || result_fd == -1)
+        {
+            perror("Error al abrir las tuberías");
+            cleanup(0);
+            exit(EXIT_FAILURE);
+        }
+        search_and_respond(query_fd, result_fd);
+        close(query_fd);
+        close(result_fd);
+    }
+
+    return 0;
 }

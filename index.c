@@ -4,30 +4,41 @@
 #include <ctype.h>
 #include <stdint.h>
 #include <zstd.h>
+
+// Función de comparación para qsort
+static int compare_uint32(const void *a, const void *b) {
+    uint32_t arg1 = *(const uint32_t *)a;
+    uint32_t arg2 = *(const uint32_t *)b;
+    return (arg1 > arg2) - (arg1 < arg2);
+}
+#include <zstd.h>
 #include "utils.h"
 
 // --- Definiciones ---
-#define INITIAL_CAPACITY 65536     // Tamaño inicial de la tabla hash (potencia de 2)
+#define INITIAL_CAPACITY 65536 // Tamaño inicial de la tabla hash (potencia de 2)
 #define MAX_SKILL_LENGTH 256
-#define COMPRESSION_LEVEL 3
-#define HASH_LOAD_FACTOR 0.75f     // Factor de carga máximo antes de redimensionar
-#define MAX_CHAIN_LENGTH 8         // Longitud máxima de cadena antes de redimensionar
+// Comprimir con Zstandard (nivel 19 es el máximo)
+#define COMPRESSION_LEVEL 6
+#define HASH_LOAD_FACTOR 0.75f // Factor de carga máximo antes de redimensionar
+#define MAX_CHAIN_LENGTH 8     // Longitud máxima de cadena antes de redimensionar
 
 // Estructura para almacenar una habilidad con sus offsets
-typedef struct SkillEntry {
+typedef struct SkillEntry
+{
     char skill[MAX_SKILL_LENGTH];
-    uint32_t *offsets; // Array de offsets
-    size_t count;      // Número de offsets
-    size_t capacity;   // Capacidad actual del array
+    uint32_t *offsets;       // Array de offsets
+    size_t count;            // Número de offsets
+    size_t capacity;         // Capacidad actual del array
     struct SkillEntry *next; // Para manejar colisiones
 } SkillEntry;
 
 // Estructura principal de la tabla hash
-typedef struct {
-    SkillEntry **entries;   // Array de punteros a entradas
-    size_t size;           // Número de entradas usadas
-    size_t capacity;       // Tamaño total de la tabla
-    size_t max_chain;      // Longitud máxima de cadena actual
+typedef struct
+{
+    SkillEntry **entries; // Array de punteros a entradas
+    size_t size;          // Número de entradas usadas
+    size_t capacity;      // Tamaño total de la tabla
+    size_t max_chain;     // Longitud máxima de cadena actual
 } Dictionary;
 
 // Inicializa un diccionario vacío
@@ -36,7 +47,7 @@ void dict_init(Dictionary *dict)
     dict->size = 0;
     dict->capacity = INITIAL_CAPACITY;
     dict->max_chain = 0;
-    dict->entries = calloc(dict->capacity, sizeof(SkillEntry*));
+    dict->entries = calloc(dict->capacity, sizeof(SkillEntry *));
 
     if (!dict->entries)
     {
@@ -48,7 +59,8 @@ void dict_init(Dictionary *dict)
 // Función hash mejorada (MurmurHash3)
 // Cada busqueda en el diccionario antes de agregar tomaba mucho tiempo.
 // Por lo que se implemento esta funcion para optimizar el proceso.
-static inline uint32_t hash_string(const char *key, size_t length) {
+static inline uint32_t hash_string(const char *key, size_t length)
+{
     const uint32_t c1 = 0xcc9e2d51;
     const uint32_t c2 = 0x1b873593;
     const uint32_t r1 = 15;
@@ -61,7 +73,8 @@ static inline uint32_t hash_string(const char *key, size_t length) {
     const uint32_t *blocks = (const uint32_t *)key;
     int i;
 
-    for (i = 0; i < nblocks; i++) {
+    for (i = 0; i < nblocks; i++)
+    {
         uint32_t k = blocks[i];
         k *= c1;
         k = (k << r1) | (k >> (32 - r1));
@@ -74,14 +87,18 @@ static inline uint32_t hash_string(const char *key, size_t length) {
     const uint8_t *tail = (const uint8_t *)(key + nblocks * 4);
     uint32_t k1 = 0;
 
-    switch (length & 3) {
-        case 3: k1 ^= tail[2] << 16;
-        case 2: k1 ^= tail[1] << 8;
-        case 1: k1 ^= tail[0];
-                k1 *= c1;
-                k1 = (k1 << r1) | (k1 >> (32 - r1));
-                k1 *= c2;
-                hash ^= k1;
+    switch (length & 3)
+    {
+    case 3:
+        k1 ^= tail[2] << 16;
+    case 2:
+        k1 ^= tail[1] << 8;
+    case 1:
+        k1 ^= tail[0];
+        k1 *= c1;
+        k1 = (k1 << r1) | (k1 >> (32 - r1));
+        k1 *= c2;
+        hash ^= k1;
     }
 
     hash ^= length;
@@ -95,159 +112,181 @@ static inline uint32_t hash_string(const char *key, size_t length) {
 }
 
 // Redimensiona la tabla hash cuando sea necesario
-static void dict_resize(Dictionary *dict) {
+static void dict_resize(Dictionary *dict)
+{
     size_t old_capacity = dict->capacity;
     SkillEntry **old_entries = dict->entries;
-    
+
     // Duplicar la capacidad
     dict->capacity *= 2;
     dict->size = 0;
     dict->max_chain = 0;
-    dict->entries = calloc(dict->capacity, sizeof(SkillEntry*));
-    
-    if (!dict->entries) {
+    dict->entries = calloc(dict->capacity, sizeof(SkillEntry *));
+
+    if (!dict->entries)
+    {
         perror("Error al redimensionar la tabla hash");
         exit(EXIT_FAILURE);
     }
-    
+
     // Reinsertar todos los elementos
-    for (size_t i = 0; i < old_capacity; i++) {
+    for (size_t i = 0; i < old_capacity; i++)
+    {
         SkillEntry *entry = old_entries[i];
-        while (entry) {
+        while (entry)
+        {
             SkillEntry *next = entry->next;
             size_t index = hash_string(entry->skill, strlen(entry->skill)) & (dict->capacity - 1);
-            
+
             // Insertar al principio de la lista
             entry->next = dict->entries[index];
             dict->entries[index] = entry;
             dict->size++;
-            
+
             // Actualizar longitud máxima de cadena
             size_t chain_length = 0;
             SkillEntry *e = dict->entries[index];
-            while (e) {
+            while (e)
+            {
                 chain_length++;
                 e = e->next;
             }
-            if (chain_length > dict->max_chain) {
+            if (chain_length > dict->max_chain)
+            {
                 dict->max_chain = chain_length;
             }
-            
+
             entry = next;
         }
     }
-    
+
     free(old_entries);
 }
 
 // Añade un offset a una habilidad en el diccionario
-void dict_add_offset(Dictionary *dict, const char *skill, uint32_t offset) {
+void dict_add_offset(Dictionary *dict, const char *skill, uint32_t offset)
+{
     // Redimensionar si el factor de carga es demasiado alto o la cadena es muy larga
-    if (dict->size >= dict->capacity * HASH_LOAD_FACTOR || 
-        dict->max_chain > MAX_CHAIN_LENGTH) {
+    if (dict->size >= dict->capacity * HASH_LOAD_FACTOR ||
+        dict->max_chain > MAX_CHAIN_LENGTH)
+    {
         dict_resize(dict);
     }
-    
+
     size_t skill_len = strlen(skill);
     uint32_t hash = hash_string(skill, skill_len);
     size_t index = hash & (dict->capacity - 1);
-    
+
     // Buscar la habilidad en la tabla hash
     SkillEntry *entry = dict->entries[index];
     SkillEntry *prev = NULL;
     size_t chain_length = 0;
-    
-    while (entry) {
+
+    while (entry)
+    {
         chain_length++;
-        if (strcmp(entry->skill, skill) == 0) {
+        if (strcmp(entry->skill, skill) == 0)
+        {
             break; // Encontrada
         }
         prev = entry;
         entry = entry->next;
     }
-    
+
     // Si no se encontró, crear una nueva entrada
-    if (!entry) {
+    if (!entry)
+    {
         entry = malloc(sizeof(SkillEntry));
-        if (!entry) {
+        if (!entry)
+        {
             perror("Error al asignar memoria para nueva entrada");
             exit(EXIT_FAILURE);
         }
-        
+
         strncpy(entry->skill, skill, MAX_SKILL_LENGTH - 1);
         entry->skill[MAX_SKILL_LENGTH - 1] = '\0';
         entry->count = 0;
         entry->capacity = 16; // Capacidad inicial mayor para reducir reubicaciones
         entry->offsets = malloc(entry->capacity * sizeof(uint32_t));
         entry->next = NULL;
-        
-        if (!entry->offsets) {
+
+        if (!entry->offsets)
+        {
             perror("Error al asignar memoria para offsets");
             exit(EXIT_FAILURE);
         }
-        
+
         // Insertar en la tabla hash
-        if (prev) {
+        if (prev)
+        {
             prev->next = entry;
-        } else {
+        }
+        else
+        {
             dict->entries[index] = entry;
         }
-        
+
         dict->size++;
         chain_length++;
     }
-    
+
     // Actualizar longitud máxima de cadena
-    if (chain_length > dict->max_chain) {
+    if (chain_length > dict->max_chain)
+    {
         dict->max_chain = chain_length;
     }
-    
+
     // Asegurar capacidad para el nuevo offset
-    if (entry->count >= entry->capacity) {
+    if (entry->count >= entry->capacity)
+    {
         entry->capacity *= 2;
         entry->offsets = realloc(entry->offsets, entry->capacity * sizeof(uint32_t));
-        
-        if (!entry->offsets) {
+
+        if (!entry->offsets)
+        {
             perror("Error al redimensionar los offsets");
             exit(EXIT_FAILURE);
         }
     }
-    
+
     // Añadir el offset (ordenado para mejor compresión)
     size_t j = entry->count;
-    while (j > 0 && entry->offsets[j - 1] > offset) {
+    while (j > 0 && entry->offsets[j - 1] > offset)
+    {
         entry->offsets[j] = entry->offsets[j - 1];
         j--;
     }
-    
+
     entry->offsets[j] = offset;
     entry->count++;
 }
 
 // Escribe el diccionario en un archivo comprimido
-void dict_write_compressed(Dictionary *dict, const char *filename)
+int dict_write_compressed(Dictionary *dict, const char *filename)
 {
     // Primero, contar el número total de entradas
     size_t total_entries = 0;
     for (size_t i = 0; i < dict->capacity; i++)
     {
         SkillEntry *entry = dict->entries[i];
-        while (entry) {
-            if (entry->count > 0) {
+        while (entry)
+        {
+            if (entry->count > 0)
+            {
                 total_entries++;
             }
             entry = entry->next;
         }
     }
 
-    // Primero escribir a un buffer en memoria
-    FILE *temp = open_memstream(NULL, &(size_t){0});
+    // Crear un archivo temporal
+    FILE *temp = tmpfile();
+    long uncompressed_size = 0;
 
     if (!temp)
     {
-        perror("Error al crear buffer temporal");
-
-        return;
+        perror("Error al crear archivo temporal");
+        return -1;
     }
 
     // 1. Escribir número de entradas
@@ -257,96 +296,166 @@ void dict_write_compressed(Dictionary *dict, const char *filename)
     for (size_t i = 0; i < dict->capacity; i++)
     {
         SkillEntry *entry = dict->entries[i];
-        while (entry) {
-            if (entry->count == 0) {
+        while (entry)
+        {
+            if (entry->count == 0)
+            {
                 entry = entry->next;
                 continue;
             }
 
-            // Escribir la habilidad
-            size_t skill_len = strlen(entry->skill) + 1; // +1 para el '\0'
-            fwrite(&skill_len, sizeof(size_t), 1, temp);
+            // Escribir la habilidad (sin el '\0' final para ahorrar espacio)
+            size_t skill_len = strlen(entry->skill);
+            fwrite(&skill_len, sizeof(uint16_t), 1, temp);  // Usamos uint16_t que es suficiente para la longitud
             fwrite(entry->skill, 1, skill_len, temp);
 
-            // Escribir los offsets
-            fwrite(&entry->count, sizeof(size_t), 1, temp);
-            fwrite(entry->offsets, sizeof(uint32_t), entry->count, temp);
-            
+            // Comprimir los offsets usando codificación delta
+            if (entry->count > 0) {
+                // Ordenar los offsets para mejor compresión
+                qsort(entry->offsets, entry->count, sizeof(uint32_t), compare_uint32);
+                
+                // Calcular deltas
+                uint32_t prev = entry->offsets[0];
+                uint32_t *deltas = malloc(entry->count * sizeof(uint32_t));
+                deltas[0] = prev;
+                for (size_t j = 1; j < entry->count; j++) {
+                    uint32_t delta = entry->offsets[j] - prev;
+                    deltas[j] = delta;
+                    prev = entry->offsets[j];
+                }
+                
+                // Escribir el conteo y los deltas
+                fwrite(&entry->count, sizeof(uint16_t), 1, temp);  // Usamos uint16_t que es suficiente
+                fwrite(deltas, sizeof(uint32_t), entry->count, temp);
+                free(deltas);
+            } else {
+                uint16_t zero = 0;
+                fwrite(&zero, sizeof(uint16_t), 1, temp);
+            }
+
             entry = entry->next;
         }
     }
 
-    // Obtener el buffer de memoria
-    fflush(temp);
+    // Obtener el tamaño actual del archivo
+    fseeko(temp, 0, SEEK_END);
+    uncompressed_size = ftello(temp);
+    fseeko(temp, 0, SEEK_SET);
+    
+    // Asignar buffer para los datos sin comprimir
+    void *uncompressed_data = malloc(uncompressed_size);
 
-    long uncompressed_size = ftell(temp);
-
-    rewind(temp);
-
-    // Comprimir con Zstandard
-    size_t compressed_bound = ZSTD_compressBound(uncompressed_size);
-    void *compressed_data = malloc(compressed_bound);
-
-    if (!compressed_data)
-    {
-        perror("Error al asignar memoria para compresión");
+    if (!uncompressed_data) {
+        perror("Error al asignar memoria para datos sin comprimir");
         fclose(temp);
-        return;
+        return -1;
     }
 
-    size_t compressed_size = ZSTD_compress(
-        compressed_data, compressed_bound,
-        temp, uncompressed_size,
-        COMPRESSION_LEVEL);
+    printf("Tamaño sin comprimir: %ld bytes\n", uncompressed_size);
+    
+    // Leer los datos del archivo temporal
+    size_t bytes_read = fread(uncompressed_data, 1, uncompressed_size, temp);
+    
+    // Cerrar el archivo temporal (se eliminará automáticamente)
+    fclose(temp);
+    
+    if (bytes_read != (size_t)uncompressed_size) {
+        fprintf(stderr, "Error al leer datos del archivo temporal: leídos %zu de %ld bytes\n", 
+                bytes_read, uncompressed_size);
+        free(uncompressed_data);
+        return -1;
+    }
+
+    printf("Tamaño leido: %ld bytes\n", bytes_read);
+    
+    size_t compressed_bound = ZSTD_compressBound(uncompressed_size);
+    void *compressed_data = malloc(compressed_bound);
+    
+    // Crear un contexto de compresión reutilizable para mejor rendimiento
+    ZSTD_CCtx* const cctx = ZSTD_createCCtx();
+
+    if (!cctx) {
+        perror("Error al crear el contexto de compresión");
+        free(uncompressed_data);
+        free(compressed_data);
+
+        return -1;
+    }
+    if (!compressed_data) {
+        perror("Error al asignar memoria para compresión");
+        free(uncompressed_data);
+
+        return -1;
+    }
+
+    printf("Memoria asignada para compresión: %ld bytes\n", compressed_bound);
+
+    // Verificar que hay datos para comprimir
+    if (uncompressed_size == 0)
+    {
+        fprintf(stderr, "Error: No hay datos para comprimir\n");
+        free(compressed_data);
+        free(uncompressed_data);
+
+        return -1;
+    }
+
+    // Esta parte puede tomar mas de 20 minutos, dependiendo de la compresión
+    printf("Tamaño de datos a comprimir: %ld bytes\n", uncompressed_size);
+    printf("Iniciando compresión con nivel %d...\n", COMPRESSION_LEVEL);
+
+    // Usar el contexto de compresión con el nivel deseado
+    size_t compressed_size = ZSTD_compressCCtx(cctx,
+                                             compressed_data, compressed_bound,
+                                             uncompressed_data, uncompressed_size,
+                                             COMPRESSION_LEVEL);
+    
+    // Liberar el contexto de compresión
+    ZSTD_freeCCtx(cctx);
+
+    // Liberar memoria de los datos sin comprimir
+    free(uncompressed_data);
 
     if (ZSTD_isError(compressed_size))
     {
         fprintf(stderr, "Error en compresión: %s\n", ZSTD_getErrorName(compressed_size));
+        fprintf(stderr, "Tamaño de entrada: %ld, Tamaño de salida máximo: %zu\n",
+                uncompressed_size, compressed_bound);
         free(compressed_data);
-        fclose(temp);
 
-        return;
+        return -1;
     }
 
+    printf("Compresión completada. Tamaño comprimido: %ld bytes\n", compressed_size);
+
+    // El directorio de salida ya existe, no es necesario crearlo
+
     // Escribir el archivo final
+    printf("Escribiendo archivo de salida: %s\n", filename);
     FILE *out = fopen(filename, "wb");
 
     if (!out)
     {
         perror("Error al crear archivo de salida");
+        fprintf(stderr, "No se pudo abrir el archivo: %s\n", filename);
         free(compressed_data);
-        fclose(temp);
 
-        return;
+        return -1;
     }
-
     // Escribir cabecera: tamaño sin comprimir, tamaño comprimido, luego datos
     fwrite(&uncompressed_size, sizeof(uncompressed_size), 1, out);
     fwrite(compressed_data, 1, compressed_size, out);
-    // Limpieza
-    free(compressed_data);
-    fclose(temp);
-    fclose(out);
-}
 
-// Libera la memoria del diccionario
-void dict_free(Dictionary *dict)
-{
-    for (size_t i = 0; i < dict->capacity; i++)
-    {
-        SkillEntry *entry = dict->entries[i];
-        while (entry) {
-            SkillEntry *next = entry->next;
-            if (entry->offsets) {
-                free(entry->offsets);
-            }
-            free(entry);
-            entry = next;
-        }
-    }
-    free(dict->entries);
-    dict->size = 0;
-    dict->capacity = 0;
+    printf("Archivo comprimido guardado en %s\n", filename);
+
+    // Limpieza
+    printf("Liberando memoria...\n");
+    free(compressed_data);
+    printf("Cerrando archivos...\n");
+    fclose(out);
+    printf("Compresión completada.\n");
+
+    return 0;
 }
 
 // Variables globales
@@ -467,8 +576,8 @@ int main()
 
         current_offset += line_len;
 
-        // Mostrar progreso cada 10,000 líneas
-        if (++processed_lines % 10000 == 0)
+        // Mostrar progreso cada 1,100,000 líneas
+        if (++processed_lines % 1000000 == 0)
         {
             printf("%zu ofertas procesadas...\n", processed_lines);
         }
@@ -480,26 +589,54 @@ int main()
     format_time(time_str, sizeof(time_str), &process_start, &process_end);
     printf("Tiempo de procesamiento: %s\n", time_str);
 
-    // Inicio compresion
-    printf("Escribiendo índice comprimido...\n");
-
     struct timespec write_start, write_end;
 
+    // Inicio compresion
+    printf("Escribiendo índice comprimido...\n");
     clock_gettime(CLOCK_MONOTONIC, &write_start);
-    dict_write_compressed(&skill_dict, "dist/jobs.idx.zst");
+
+    int compressed = dict_write_compressed(&skill_dict, "dist/jobs.idx.zst");
+
     // Fin de escritura
     clock_gettime(CLOCK_MONOTONIC, &write_end);
     format_time(time_str, sizeof(time_str), &write_start, &write_end);
     printf("Tiempo de escritura del índice: %s\n", time_str);
-    
+
+    if (compressed != 0)
+    {
+        fprintf(stderr, "Error al escribir el índice comprimido\n");
+        return 1;
+    }
+
     // Fin total
     clock_gettime(CLOCK_MONOTONIC, &end_time);
     format_time(time_str, sizeof(time_str), &start_time, &end_time);
     printf("Tiempo total de indexado: %s\n", time_str);
+
     // Liberar memoria
-    dict_free(&skill_dict);
+    for (size_t i = 0; i < skill_dict.capacity; i++)
+    {
+        SkillEntry *entry = skill_dict.entries[i];
+
+        while (entry)
+        {
+            SkillEntry *next = entry->next;
+
+            if (entry->offsets)
+            {
+                free(entry->offsets);
+            }
+
+            free(entry);
+            entry = next;
+        }
+    }
+
+    free(skill_dict.entries);
+    skill_dict.size = 0;
+    skill_dict.capacity = 0;
+
     printf("Proceso completado. Índice optimizado creado en 'dist/jobs.idx.zst'\n");
 
     return 0;
 }
-
