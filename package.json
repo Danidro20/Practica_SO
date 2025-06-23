@@ -1,7 +1,8 @@
 {
    "scripts": {
-      "index": "gcc -o index index.c && mkdir -p dist && mv -f index dist/index && ./dist/index",
-      "engine": "gcc -o engine engine.c && mkdir -p dist && mv -f engine dist/engine && ./dist/engine"
+      "index": "gcc -o index index.c -lzstd && mkdir -p dist && mv -f index dist/index && ./dist/index",
+      "engine": "gcc -o engine engine.c -lzstd && mkdir -p dist && mv -f engine dist/engine && ./dist/engine",
+      "ui": "gcc -o ui ui.c && mkdir -p dist && mv -f ui dist/ui && ./dist/ui"
    },
    "packageManager": "yarn@4.9.2"
 }
