@@ -3,8 +3,9 @@
 #include <string.h>
 #include <ctype.h>
 
-// --- Definiciones de la Tabla Hash (MODIFICADAS) ---
-#define TABLE_SIZE 4520789 // Puedes ajustar este valor si es necesario
+// --- Definiciones de la Tabla Hash ---
+// Un tamaño razonable para minimizar colisiones durante la indexación.
+#define TABLE_SIZE 5003
 
 // Nodo para la lista enlazada de offsets
 typedef struct OffsetNode {
@@ -12,7 +13,7 @@ typedef struct OffsetNode {
     struct OffsetNode* next;
 } OffsetNode;
 
-// Nodo de la tabla hash que ahora contiene una lista de offsets
+// Nodo de la tabla hash
 typedef struct HashNode {
     char* skill;
     OffsetNode* offsets;
@@ -23,9 +24,9 @@ HashNode* hashTable[TABLE_SIZE];
 
 // --- Prototipos de Funciones ---
 unsigned long hash_function(const char* str);
-void insert_skill(const char* skill, long offset); // Lógica modificada
-void write_index_file(const char* filename);     // Lógica modificada
-void free_hash_table();                           // Lógica modificada
+void insert_skill(const char* skill, long offset);
+void write_index_files(const char* skl_filename, const char* idx_filename); // Lógica modificada
+void free_hash_table();
 char* trim_whitespace(char* str);
 
 // --- Implementación ---
@@ -44,7 +45,7 @@ int main() {
     char line_buffer[4096];
     long current_offset = ftell(file_csv);
 
-    // Ignorar la cabecera del CSV si existe
+    // Ignorar la cabecera del CSV
     if (fgets(line_buffer, sizeof(line_buffer), file_csv) != NULL) {
         current_offset = ftell(file_csv);
     }
@@ -65,10 +66,11 @@ int main() {
         current_offset = ftell(file_csv);
     }
     fclose(file_csv);
-    printf("El archivo CSV ha sido procesado. Construyendo el índice...\n");
+    printf("El archivo CSV ha sido procesado. Construyendo los índices...\n");
 
-    write_index_file("jobs.idx");
-    printf("Archivo de índice 'jobs.idx' creado exitosamente.\n");
+    // Llama a la función para escribir los dos archivos de índice.
+    write_index_files("jobs.skl", "jobs.idx");
+    printf("Archivos de índice 'jobs.skl' y 'jobs.idx' creados exitosamente.\n");
 
     free_hash_table();
     printf("Memoria liberada.\n");
@@ -77,22 +79,67 @@ int main() {
 }
 
 /**
- * @brief (MODIFICADA) Inserta una habilidad. Si ya existe, añade el offset a su lista.
- * Si no existe, crea un nuevo nodo para la habilidad y añade el offset.
+ * @brief Escribe la tabla hash en dos archivos separados:
+ * - .skl: Un directorio de habilidades (índice primario para carga en memoria).
+ * - .idx: Los datos brutos de las listas de offsets (índice secundario en disco).
+ *
+ * Formato .skl: [longitud_skill, skill, num_offsets, offset_en_idx] para cada habilidad.
+ * Formato .idx: [offset1, offset2, ...] para cada habilidad, una tras otra.
  */
+void write_index_files(const char* skl_filename, const char* idx_filename) {
+    FILE* file_skl = fopen(skl_filename, "wb");
+    FILE* file_idx = fopen(idx_filename, "wb");
+    if (!file_skl || !file_idx) {
+        perror("Error al crear archivos de índice");
+        if(file_skl) fclose(file_skl);
+        if(file_idx) fclose(file_idx);
+        return;
+    }
+
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        HashNode* current_node = hashTable[i];
+        while (current_node != NULL) {
+            // 1. Contar los offsets para la habilidad actual.
+            size_t offset_count = 0;
+            OffsetNode* temp_offset = current_node->offsets;
+            while (temp_offset != NULL) {
+                offset_count++;
+                temp_offset = temp_offset->next;
+            }
+
+            if (offset_count > 0) {
+                // 2. Obtener la posición actual en el archivo .idx donde se guardará la lista.
+                long idx_offset = ftell(file_idx);
+
+                // 3. Escribir la entrada del directorio en el archivo .skl (skill, conteo y offset).
+                size_t skill_len = strlen(current_node->skill);
+                fwrite(&skill_len, sizeof(size_t), 1, file_skl);
+                fwrite(current_node->skill, sizeof(char), skill_len, file_skl);
+                fwrite(&offset_count, sizeof(size_t), 1, file_skl);
+                fwrite(&idx_offset, sizeof(long), 1, file_skl);
+
+                // 4. Escribir la lista de offsets completa en el archivo .idx.
+                temp_offset = current_node->offsets;
+                while (temp_offset != NULL) {
+                    fwrite(&temp_offset->offset, sizeof(long), 1, file_idx);
+                    temp_offset = temp_offset->next;
+                }
+            }
+            current_node = current_node->next;
+        }
+    }
+    fclose(file_skl);
+    fclose(file_idx);
+}
+
+
 void insert_skill(const char* skill, long offset) {
     unsigned long index = hash_function(skill);
     HashNode* current_node = hashTable[index];
-
-    // 1. Buscar si la habilidad ya existe
     while (current_node != NULL) {
-        if (strcmp(current_node->skill, skill) == 0) {
-            break; // La encontramos
-        }
+        if (strcmp(current_node->skill, skill) == 0) break;
         current_node = current_node->next;
     }
-
-    // 2. Si la habilidad no existe, crear un nuevo nodo principal
     if (current_node == NULL) {
         current_node = (HashNode*)malloc(sizeof(HashNode));
         if (!current_node) { perror("malloc HashNode"); exit(1); }
@@ -102,8 +149,6 @@ void insert_skill(const char* skill, long offset) {
         current_node->next = hashTable[index];
         hashTable[index] = current_node;
     }
-
-    // 3. Añadir el nuevo offset a la lista de offsets del nodo
     OffsetNode* new_offset_node = (OffsetNode*)malloc(sizeof(OffsetNode));
     if (!new_offset_node) { perror("malloc OffsetNode"); exit(1); }
     new_offset_node->offset = offset;
@@ -111,65 +156,16 @@ void insert_skill(const char* skill, long offset) {
     current_node->offsets = new_offset_node;
 }
 
-/**
- * @brief (MODIFICADA) Escribe el índice en el nuevo formato optimizado.
- * formato: [longitud_skill, skill, num_offsets, offset1, offset2, ...]
- */
-void write_index_file(const char* filename) {
-    FILE* file_idx = fopen(filename, "wb");
-    if (!file_idx) {
-        perror("Error al crear el archivo de índice");
-        return;
-    }
-
-    for (int i = 0; i < TABLE_SIZE; i++) {
-        HashNode* current_node = hashTable[i];
-        while (current_node != NULL) {
-            // Escribir la habilidad una vez
-            size_t skill_len = strlen(current_node->skill);
-            fwrite(&skill_len, sizeof(size_t), 1, file_idx);
-            fwrite(current_node->skill, sizeof(char), skill_len, file_idx);
-
-            // Contar y luego escribir todos sus offsets
-            size_t offset_count = 0;
-            OffsetNode* temp_offset = current_node->offsets;
-            while (temp_offset != NULL) {
-                offset_count++;
-                temp_offset = temp_offset->next;
-            }
-
-            // Escribir la cantidad de offsets
-            fwrite(&offset_count, sizeof(size_t), 1, file_idx);
-
-            // Escribir cada offset
-            temp_offset = current_node->offsets;
-            while (temp_offset != NULL) {
-                fwrite(&temp_offset->offset, sizeof(long), 1, file_idx);
-                temp_offset = temp_offset->next;
-            }
-            
-            current_node = current_node->next;
-        }
-    }
-    fclose(file_idx);
-}
-
-/**
- * @brief (MODIFICADA) Libera la tabla hash, incluyendo las listas de offsets anidadas.
- */
 void free_hash_table() {
     for (int i = 0; i < TABLE_SIZE; i++) {
         HashNode* current_node = hashTable[i];
         while (current_node != NULL) {
-            // 1. Liberar la lista de offsets interna
             OffsetNode* current_offset = current_node->offsets;
             while(current_offset != NULL) {
                 OffsetNode* temp_offset = current_offset;
                 current_offset = current_offset->next;
                 free(temp_offset);
             }
-
-            // 2. Liberar el nodo principal
             HashNode* temp_node = current_node;
             current_node = current_node->next;
             free(temp_node->skill);
@@ -182,7 +178,7 @@ unsigned long hash_function(const char* str) {
     unsigned long hash = 5381;
     int c;
     while ((c = *str++)) {
-        hash = ((hash << 5) + hash) + c; // hash * 33 + c
+        hash = ((hash << 5) + hash) + c;
     }
     return hash % TABLE_SIZE;
 }
