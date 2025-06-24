@@ -7,7 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-// --- Nuevas Estructuras de Datos ---
+// --- Estructuras de Datos ---
 typedef struct OffsetNode {
     long offset;
     struct OffsetNode* next;
@@ -15,8 +15,8 @@ typedef struct OffsetNode {
 
 typedef struct HashNode {
     char* skill;
-    OffsetNode* offsets; // Lista de offsets para esta habilidad
-    struct HashNode* next; // Para colisiones de la tabla hash
+    OffsetNode* offsets;
+    struct HashNode* next;
 } HashNode;
 
 #define TABLE_SIZE 5003
@@ -28,7 +28,7 @@ HashNode* hashTable[TABLE_SIZE];
 
 // --- Prototipos ---
 unsigned long hash_function(const char* str);
-void load_full_index(const char* filename);
+void load_full_index(const char* filename); // Lógica modificada
 void search_and_respond(int query_fd, int result_fd);
 void free_full_hash_table();
 void cleanup(int signum);
@@ -61,7 +61,9 @@ int main() {
     return 0;
 }
 
-// Carga el índice plano y lo reconstruye en una tabla hash con listas de offsets
+/**
+ * @brief (MODIFICADA) Carga el índice desde el nuevo formato optimizado.
+ */
 void load_full_index(const char* filename) {
     for(int i=0; i<TABLE_SIZE; i++) hashTable[i] = NULL;
 
@@ -72,46 +74,44 @@ void load_full_index(const char* filename) {
     }
 
     size_t skill_len;
-    long offset;
-    
     while (fread(&skill_len, sizeof(size_t), 1, file_idx) == 1) {
+        // Leer la habilidad
         char* skill_buffer = malloc(skill_len + 1);
-        if (!skill_buffer) {
-            perror("Malloc failed for skill buffer");
-            exit(EXIT_FAILURE);
-        }
-
+        if (!skill_buffer) { perror("malloc skill_buffer"); exit(EXIT_FAILURE); }
         fread(skill_buffer, 1, skill_len, file_idx);
         skill_buffer[skill_len] = '\0';
-        fread(&offset, sizeof(long), 1, file_idx);
 
-        unsigned long index = hash_function(skill_buffer);
-        HashNode* current_node = hashTable[index];
+        // Crear el HashNode para esta habilidad
+        HashNode* new_node = (HashNode*)malloc(sizeof(HashNode));
+        if (!new_node) { perror("malloc HashNode"); exit(EXIT_FAILURE); }
+        new_node->skill = skill_buffer; // Transferir propiedad del buffer
+        new_node->offsets = NULL;
         
-        while(current_node != NULL) {
-            if (strcmp(current_node->skill, skill_buffer) == 0) break;
-            current_node = current_node->next;
+        // Insertar en la tabla hash
+        unsigned long index = hash_function(new_node->skill);
+        new_node->next = hashTable[index];
+        hashTable[index] = new_node;
+
+        // Leer la cantidad de offsets que vienen a continuación
+        size_t offset_count;
+        fread(&offset_count, sizeof(size_t), 1, file_idx);
+
+        // Leer cada offset y añadirlo a la lista
+        for (size_t i = 0; i < offset_count; i++) {
+            long offset_val;
+            fread(&offset_val, sizeof(long), 1, file_idx);
+            
+            OffsetNode* new_offset_node = (OffsetNode*)malloc(sizeof(OffsetNode));
+            if (!new_offset_node) { perror("malloc OffsetNode"); exit(EXIT_FAILURE); }
+            new_offset_node->offset = offset_val;
+            new_offset_node->next = new_node->offsets; // Apila al inicio de la lista
+            new_node->offsets = new_offset_node;
         }
-
-        if (current_node == NULL) {
-            current_node = (HashNode*)malloc(sizeof(HashNode));
-            current_node->skill = strdup(skill_buffer);
-            current_node->offsets = NULL;
-            current_node->next = hashTable[index];
-            hashTable[index] = current_node;
-        }
-
-        OffsetNode* new_offset = (OffsetNode*)malloc(sizeof(OffsetNode));
-        new_offset->offset = offset;
-        new_offset->next = current_node->offsets;
-        current_node->offsets = new_offset;
-
-        free(skill_buffer);
     }
     fclose(file_idx);
 }
 
-// Lógica principal de búsqueda con intersección
+// Lógica principal de búsqueda con intersección (SIN CAMBIOS)
 void search_and_respond(int query_fd, int result_fd) {
     char query_buffer[1024];
     ssize_t bytes_read = read(query_fd, query_buffer, sizeof(query_buffer) - 1);
@@ -144,8 +144,8 @@ void search_and_respond(int query_fd, int result_fd) {
             node = node->next;
         }
 
-        if (!node) { // Uno de los criterios no existe, la intersección es vacía
-            while(intersection_list) { // Liberar la lista actual
+        if (!node) {
+            while(intersection_list) {
                  OffsetNode* temp = intersection_list;
                  intersection_list = intersection_list->next;
                  free(temp);
@@ -155,7 +155,6 @@ void search_and_respond(int query_fd, int result_fd) {
         }
 
         if (first_criterion) {
-            // Llenar la lista inicial con los offsets del primer criterio
             for(OffsetNode* o_node = node->offsets; o_node != NULL; o_node = o_node->next) {
                 OffsetNode* new_intersect_node = (OffsetNode*)malloc(sizeof(OffsetNode));
                 new_intersect_node->offset = o_node->offset;
@@ -164,7 +163,6 @@ void search_and_respond(int query_fd, int result_fd) {
             }
             first_criterion = 0;
         } else {
-            // Filtrar la lista de intersección actual con la nueva lista de offsets
             OffsetNode* current_intersect = intersection_list;
             OffsetNode* prev_intersect = NULL;
             while(current_intersect != NULL) {
@@ -198,11 +196,11 @@ void search_and_respond(int query_fd, int result_fd) {
     } else {
         char final_response[8192] = "";
         char line_buffer[4096];
-	 FILE* csv_file = fopen("data.csv", "r");
+	    FILE* csv_file = fopen("data.csv", "r");
 
         if (csv_file == NULL) {
             perror("Error: No se pudo abrir data.csv en el motor");
-            write(result_fd, "NA", 2); // Enviar NA si el archivo no se puede leer
+            write(result_fd, "NA", 2);
         } else {
             for(OffsetNode* result_node = intersection_list; result_node != NULL; result_node = result_node->next) {
                 if (fseek(csv_file, result_node->offset, SEEK_SET) == 0) {
@@ -212,7 +210,7 @@ void search_and_respond(int query_fd, int result_fd) {
                             strcat(final_response, line_buffer);
                         } else {
                             strcat(final_response, "\n... (resultados truncados) ...");
-                            break; // Salir del bucle para no desbordar el buffer
+                            break;
                         }
                     }
                 }
@@ -220,8 +218,8 @@ void search_and_respond(int query_fd, int result_fd) {
             fclose(csv_file);
             write(result_fd, final_response, strlen(final_response));
         }       
-
     }
+
      while(intersection_list) {
          OffsetNode* temp = intersection_list;
          intersection_list = intersection_list->next;
@@ -229,52 +227,38 @@ void search_and_respond(int query_fd, int result_fd) {
      }
 }
 
-// --- Funciones Auxiliares (Previamente Faltantes) ---
+// --- Funciones Auxiliares (SIN CAMBIOS) ---
 
-/**
- * @brief Función hash djb2. Convierte una cadena a un índice de la tabla.
- */
 unsigned long hash_function(const char* str) {
     unsigned long hash = 5381;
     int c;
     while ((c = *str++)) {
-        hash = ((hash << 5) + hash) + c; // hash * 33 + c
+        hash = ((hash << 5) + hash) + c;
     }
     return hash % TABLE_SIZE;
 }
 
-/**
- * @brief Libera toda la memoria de la tabla hash, incluyendo las listas de offsets.
- */
 void free_full_hash_table() {
     for (int i = 0; i < TABLE_SIZE; i++) {
         HashNode* current_node = hashTable[i];
         while (current_node != NULL) {
-            // 1. Liberar la lista de offsets interna
             OffsetNode* current_offset = current_node->offsets;
             while(current_offset != NULL) {
                 OffsetNode* temp_offset = current_offset;
                 current_offset = current_offset->next;
                 free(temp_offset);
             }
-
-            // 2. Liberar el nodo principal
             HashNode* temp_node = current_node;
             current_node = current_node->next;
-            free(temp_node->skill); // Liberar la cadena de la habilidad
-            free(temp_node);        // Liberar el nodo HashNode
+            free(temp_node->skill);
+            free(temp_node);
         }
         hashTable[i] = NULL;
     }
 }
 
-
-/**
- * @brief Limpia los recursos (tuberías y memoria) antes de salir.
- */
 void cleanup(int signum) {
     (void)signum; 
-    
     printf("\nCerrando el motor de búsqueda...\n");
     free_full_hash_table();
     unlink(QUERY_PIPE);
