@@ -5,7 +5,7 @@
 
 // --- Definiciones de la Tabla Hash ---
 // Un tamaño razonable para minimizar colisiones durante la indexación.
-#define TABLE_SIZE 5003
+#define TABLE_SIZE 4520789
 
 // Nodo para la lista enlazada de offsets
 typedef struct OffsetNode {

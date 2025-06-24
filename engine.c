@@ -22,7 +22,7 @@ typedef struct HashNode {
     struct HashNode* next;
 } HashNode;
 
-#define TABLE_SIZE 5003
+#define TABLE_SIZE 4520789
 HashNode* skillDirectory[TABLE_SIZE];
 
 // Estructura para gestionar los criterios de una consulta.

@@ -1,0 +1,13 @@
+# Archivos de datos
+data.csv
+habilidades.csv
+jobs.idx
+jobs.skl
+
+# Archivos compilados
+engine
+ui
+crear_indice
+
+# Archivos temporales o binarios
+*.o
