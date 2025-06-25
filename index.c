@@ -97,7 +97,7 @@ void insert_skill(const char* skill, long offset) {
 }
 
 
-// (NUEVA) Función para escribir los índices completamente ordenados
+// Función para escribir los índices completamente ordenados
 void write_sorted_indices(const char* skl_filename, const char* idx_filename) {
     // 1. Contar el número total de skills únicas.
     size_t total_skills = 0;

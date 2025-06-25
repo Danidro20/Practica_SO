@@ -1,3 +1,6 @@
+# Build
+dist/
+
 # Archivos de datos
 data.csv
 habilidades.csv
@@ -11,3 +14,8 @@ crear_indice
 
 # Archivos temporales o binarios
 *.o
+
+# Yarn
+.yarn/
+yarn.lock
+node_modules/

@@ -50,7 +50,7 @@ int main() {
     return 0;
 }
 
-// (NUEVA) Realiza búsqueda binaria en el archivo .skl para encontrar metadata.
+// Realiza búsqueda binaria en el archivo .skl para encontrar metadata.
 int find_skill_metadata(FILE* skl_file, const char* skill, Criterion* meta) {
     fseek(skl_file, 0, SEEK_SET); // Ir al inicio
     size_t total_skills;
@@ -93,7 +93,7 @@ int compare_criteria(const void* a, const void* b) {
     return 0;
 }
 
-// (REDISEÑADA) Busca e interseca trabajando desde disco.
+// Busca e interseca trabajando desde disco.
 void search_and_respond(int query_fd, int result_fd) {
     char query_buffer[1024];
     ssize_t bytes_read = read(query_fd, query_buffer, sizeof(query_buffer) - 1);
