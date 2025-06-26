@@ -16,7 +16,7 @@ Hemos añadido una lista (habilidades.csv) que contiene todas las habilidades qu
 
 ## Arquitectura del Sistema
 
-El sistema sigue una arquitectura desacoplada, donde cada componente tiene una única responsabilidad. La comunicación entre la interfaz de usuario y el motor de búsqueda se realiza a través de **tuberías con nombre (Named Pipes)**, un mecanismo de Comunicación Entre Procesos (IPC) de POSIX.
+El sistema sigue una arquitectura desacoplada, donde cada componente tiene una única responsabilidad. La comunicación entre la interfaz de usuario y el motor de búsqueda se realiza a través de **tuberías**, un mecanismo de Comunicación Entre Procesos (IPC) de POSIX.
 
 ```
 +-------------------+      +----------------+      +------------------+
