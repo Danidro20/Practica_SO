@@ -26,10 +26,14 @@ int main()
     {
         printf("El índice no existe. Generando índice...\n");
 
-        if (execute_command("yarn index") != 0)
+        if (!file_exists("dist/index")) {
+            fprintf(stderr, "Error: El ejecutable 'dist/index' no existe. Ejecute 'make' primero.\n");
+            return 1;
+        }
+
+        if (execute_command("./dist/index") != 0)
         {
             fprintf(stderr, "Error al generar el índice\n");
-
             return 1;
         }
     }
@@ -60,20 +64,13 @@ int main()
     printf("\n=== Iniciando servicios ===\n");
     // Iniciar el motor en segundo plano
     printf("Iniciando motor de búsqueda...\n");
-
-    pid_t engine_pid = fork();
-
-    if (engine_pid == 0)
-    {
-        // Proceso hijo - motor de búsqueda, sin modo depuración
-        execlp("./dist/engine", "engine", "-n", (char *)NULL);
-        perror("Error al iniciar el motor");
-        exit(1);
+    if (!file_exists("dist/engine")) {
+        fprintf(stderr, "Error: El ejecutable 'dist/engine' no existe. Ejecute 'make' primero.\n");
+        return 1;
     }
-    else if (engine_pid < 0)
+    if (execute_command("./dist/engine") != 0)
     {
-        perror("Error al crear proceso para el motor");
-
+        fprintf(stderr, "Error al iniciar el motor de búsqueda\n");
         return 1;
     }
 
@@ -82,18 +79,19 @@ int main()
 
     // Iniciar la interfaz de usuario
     printf("Iniciando interfaz de usuario...\n");
-    printf("----------------------------------------\n");
-
-    int ui_status = system("./dist/ui");
-
-    if (ui_status != 0)
+    if (!file_exists("dist/ui")) {
+        fprintf(stderr, "Error: El ejecutable 'dist/ui' no existe. Ejecute 'make' primero.\n");
+        return 1;
+    }
+    if (execute_command("./dist/ui") != 0)
     {
-        fprintf(stderr, "La interfaz de usuario terminó con un error\n");
+        fprintf(stderr, "Error al iniciar la interfaz de usuario\n");
+        return 1;
     }
 
     // Limpieza
-    printf("\nDeteniendo el motor de búsqueda...\n");
-    kill(engine_pid, SIGTERM);
+    printf("\nFinalizando servicios...\n");
+    system("pkill -f dist/engine");
     printf("\n=== Sistema finalizado ===\n");
 
     return 0;

@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
+#include "utils.h"
 
 #define TABLE_SIZE 4520789
 
@@ -29,6 +31,9 @@ int compare_hash_nodes_alpha(const void* a, const void* b);
 int compare_longs(const void* a, const void* b);
 
 int main() {
+    struct timespec start_time, end_time;
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
+    
     for (int i = 0; i < TABLE_SIZE; i++) hashTable[i] = NULL;
 
     FILE* file_csv = fopen("data.csv", "r");
@@ -70,7 +75,13 @@ int main() {
     printf("Archivos de índice ordenados 'jobs.skl' y 'jobs.idx' creados.\n");
 
     free_hash_table();
+    
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+    char time_buffer[100];
+    format_time(time_buffer, sizeof(time_buffer), &start_time, &end_time);
     printf("Memoria liberada.\n");
+    printf("Tiempo total de indexación: %s\n", time_buffer);
+    
     return 0;
 }
 

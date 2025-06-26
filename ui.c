@@ -3,6 +3,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
+#include "utils.h"
 
 #define QUERY_PIPE "/tmp/job_query_pipe"
 #define RESULT_PIPE "/tmp/job_result_pipe"
@@ -58,6 +60,10 @@ int main() {
                 continue;
             }
 
+            // Medir tiempo de respuesta
+            struct timespec start_time, end_time;
+            clock_gettime(CLOCK_MONOTONIC, &start_time);
+            
             // Enviar la consulta al motor
             int query_fd = open(QUERY_PIPE, O_WRONLY);
             write(query_fd, query_string, strlen(query_string));
@@ -68,11 +74,18 @@ int main() {
             int result_fd = open(RESULT_PIPE, O_RDONLY);
             ssize_t bytes_read = read(result_fd, result_buffer, sizeof(result_buffer) - 1);
             close(result_fd);
+            
+            // Calcular tiempo transcurrido
+            clock_gettime(CLOCK_MONOTONIC, &end_time);
+            char time_buffer[100];
+            format_time(time_buffer, sizeof(time_buffer), &start_time, &end_time);
 
             result_buffer[bytes_read] = '\0';
             printf("\n--- Resultados de la Búsqueda ---\n");
+            printf("Tiempo de respuesta: %s\n\n", time_buffer);
             if (strcmp(result_buffer, "NA") == 0) {
-                printf("No se encontraron ofertas con TODOS los criterios especificados.\n");
+                // No se encontraron ofertas con TODOS los criterios especificados.
+                printf("NA\n");
             } else {
                 printf("%s", result_buffer);
             }
