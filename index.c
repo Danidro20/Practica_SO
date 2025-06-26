@@ -71,8 +71,12 @@ int main() {
     printf("\nProcesamiento de CSV finalizado. Ordenando y escribiendo índices...\n");
     fclose(file_csv);
 
-    write_sorted_indices("jobs.skl", "jobs.idx");
-    printf("Archivos de índice ordenados 'jobs.skl' y 'jobs.idx' creados.\n");
+    // Crear el directorio dist si no existe
+    mkdir("dist", 0755);
+    
+    // Escribir los archivos de índice en el directorio dist
+    write_sorted_indices("dist/jobs.skl", "dist/jobs.idx");
+    printf("Archivos de índice ordenados 'dist/jobs.skl' y 'dist/jobs.idx' creados.\n");
 
     free_hash_table();
     

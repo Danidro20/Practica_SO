@@ -35,7 +35,11 @@ int main() {
             int index = choice - 1;
             char buffer[256];
             printf("Ingrese el valor para el criterio %d: ", choice);
-            fgets(buffer, sizeof(buffer), stdin);
+            if (!fgets(buffer, sizeof(buffer), stdin)) {
+                printf("Error al leer la entrada. Intente de nuevo.\n");
+                clean_stdin();
+                continue;
+            }
             buffer[strcspn(buffer, "\n")] = 0;
 
             if (criteria[index] != NULL) {
@@ -66,7 +70,11 @@ int main() {
             
             // Enviar la consulta al motor
             int query_fd = open(QUERY_PIPE, O_WRONLY);
-            write(query_fd, query_string, strlen(query_string));
+            if (write(query_fd, query_string, strlen(query_string)) == -1) {
+                perror("Error al enviar la consulta al motor");
+                close(query_fd);
+                continue;
+            }
             close(query_fd);
 
             // Recibir respuesta

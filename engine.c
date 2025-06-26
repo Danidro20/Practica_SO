@@ -7,8 +7,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#define SKILL_DIR_FILE "jobs.skl"
-#define INDEX_FILE "jobs.idx"
+#define SKILL_DIR_FILE "dist/jobs.skl"
+#define INDEX_FILE "dist/jobs.idx"
 #define QUERY_PIPE "/tmp/job_query_pipe"
 #define RESULT_PIPE "/tmp/job_result_pipe"
 
@@ -54,7 +54,11 @@ int main() {
 int find_skill_metadata(FILE* skl_file, const char* skill, Criterion* meta) {
     fseek(skl_file, 0, SEEK_SET); // Ir al inicio
     size_t total_skills;
-    fread(&total_skills, sizeof(size_t), 1, skl_file); // Leer total de skills
+    // Leer total de skills
+    if (fread(&total_skills, sizeof(size_t), 1, skl_file) != 1) {
+        perror("Error al leer el número total de habilidades");
+        return 0;
+    }
 
     // NOTA: Una búsqueda binaria real en archivo es compleja.
     // Para simplificar, haremos una búsqueda lineal que es más lenta
@@ -66,7 +70,10 @@ int find_skill_metadata(FILE* skl_file, const char* skill, Criterion* meta) {
         if (fread(&skill_len, sizeof(size_t), 1, skl_file) != 1) return 0; // Fin de archivo
 
         char* skill_buffer = malloc(skill_len + 1);
-        fread(skill_buffer, 1, skill_len, skl_file);
+        if (fread(skill_buffer, 1, skill_len, skl_file) != skill_len) {
+            free(skill_buffer);
+            return 0;
+        }
         skill_buffer[skill_len] = '\0';
         
         int is_match = (strcmp(skill, skill_buffer) == 0);
@@ -74,8 +81,12 @@ int find_skill_metadata(FILE* skl_file, const char* skill, Criterion* meta) {
         
         if (is_match) {
             meta->skill = strdup(skill);
-            fread(&meta->count, sizeof(size_t), 1, skl_file);
-            fread(&meta->offset, sizeof(long), 1, skl_file);
+            if (fread(&meta->count, sizeof(size_t), 1, skl_file) != 1) {
+                return 0;
+            }
+            if (fread(&meta->offset, sizeof(long), 1, skl_file) != 1) {
+                return 0;
+            }
             return 1; // Encontrado
         } else {
             // Si no es, saltar el resto de los metadatos de esta entrada
@@ -108,15 +119,21 @@ void search_and_respond(int query_fd, int result_fd) {
         tokens[n_criteria++] = token;
         token = strtok(NULL, ";");
     }
-    if (n_criteria == 0) { write(result_fd, "NA", 2); return; }
+    if (n_criteria == 0) { 
+        if (write(result_fd, "NA", 2) == -1) perror("Error al escribir en el pipe de resultados"); 
+        return; 
+    }
 
     Criterion criteria[3] = {0};
     FILE* skl_file = fopen(SKILL_DIR_FILE, "rb");
-    if (!skl_file) { write(result_fd, "NA", 2); return; }
+    if (!skl_file) { 
+        if (write(result_fd, "NA", 2) == -1) perror("Error al escribir en el pipe de resultados"); 
+        return; 
+    }
 
     for (int i = 0; i < n_criteria; i++) {
         if (!find_skill_metadata(skl_file, tokens[i], &criteria[i])) {
-            write(result_fd, "NA", 2);
+            if (write(result_fd, "NA", 2) == -1) perror("Error al escribir en el pipe de resultados");
             fclose(skl_file);
             for(int j = 0; j < i; j++) free(criteria[j].skill);
             return;
@@ -131,7 +148,11 @@ void search_and_respond(int query_fd, int result_fd) {
     // Cargar la primera lista (la más corta) en un búfer temporal.
     long* intersection_buffer = malloc(criteria[0].count * sizeof(long));
     fseek(idx_file, criteria[0].offset, SEEK_SET);
-    fread(intersection_buffer, sizeof(long), criteria[0].count, idx_file);
+    if (fread(intersection_buffer, sizeof(long), criteria[0].count, idx_file) != criteria[0].count) {
+        perror("Error al leer los datos de intersección");
+        free(intersection_buffer);
+        return;
+    }
     size_t intersection_size = criteria[0].count;
 
     // Intersecar con las demás listas
@@ -140,7 +161,12 @@ void search_and_respond(int query_fd, int result_fd) {
 
         long* next_list_buffer = malloc(criteria[i].count * sizeof(long));
         fseek(idx_file, criteria[i].offset, SEEK_SET);
-        fread(next_list_buffer, sizeof(long), criteria[i].count, idx_file);
+        if (fread(next_list_buffer, sizeof(long), criteria[i].count, idx_file) != criteria[i].count) {
+            perror("Error al leer la siguiente lista de offsets");
+            free(next_list_buffer);
+            free(intersection_buffer);
+            return;
+        }
         
         long* new_intersection_buffer = malloc(intersection_size * sizeof(long));
         size_t new_size = 0;
@@ -164,7 +190,9 @@ void search_and_respond(int query_fd, int result_fd) {
 
     // --- Construir Respuesta ---
     if (intersection_size == 0) {
-        write(result_fd, "NA", 2);
+        if (write(result_fd, "NA", 2) == -1) {
+            perror("Error al escribir en el pipe de resultados");
+        }
     } else {
         char final_response[8192] = "";
         char line_buffer[4096];
@@ -182,7 +210,9 @@ void search_and_respond(int query_fd, int result_fd) {
              }
         }
         fclose(csv_file);
-        write(result_fd, final_response, strlen(final_response));
+        if (write(result_fd, final_response, strlen(final_response)) == -1) {
+            perror("Error al escribir la respuesta final");
+        }
     }
 
     free(intersection_buffer);

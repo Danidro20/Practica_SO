@@ -4,7 +4,7 @@
       "index": "yarn build:index && ./dist/index",
       "build:engine": "gcc -o engine engine.c -lzstd -lm && mkdir -p dist && mv -f engine dist/engine",
       "engine": "yarn build:engine && ./dist/engine",
-      "build:ui": "gcc -o ui ui.c && mkdir -p dist && mv -f ui dist/ui",
+      "build:ui": "gcc -o ui ui.c utils.c -lm && mkdir -p dist && mv -f ui dist/ui",
       "ui": "yarn build:ui && ./dist/ui",
       "build:main": "gcc -o main p1-dataProgram.c utils.c -lzstd -lm && mkdir -p dist && mv -f main dist/main",
       "build": "yarn build:index && yarn build:engine && yarn build:ui && yarn build:main",
