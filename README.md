@@ -73,61 +73,15 @@ Para compilar y ejecutar este proyecto, necesitarás:
 
 Sigue estos pasos para poner en marcha el sistema.
 
-### 1\. Compilación
+### Compilación
 
-Clona el repositorio y compila los tres ejecutables usando `make`. Se incluye un `Makefile` para facilitar el proceso.
-
-```bash
-# Clona el repositorio
-git clone <URL_DEL_REPOSITORIO>
-cd <NOMBRE_DEL_REPOSITORIO>
-
-# Compila el proyecto
-make all
-```
-
-Esto generará tres archivos ejecutables: `crear_indice`, `engine` y `ui`.
-
-### 2\. Paso 1: Generar el Índice
-
-Antes de poder realizar búsquedas, debes indexar tu archivo de datos. Asegúrate de que tu archivo de ofertas de empleo se llame `data.csv` y esté en la misma carpeta.
-
-```bash
-# Ejecuta el indexador. Este proceso puede tardar si el archivo es grande.
-./crear_indice
-```
-
-Verás un contador de progreso. Al finalizar, tendrás los archivos `jobs.skl` y `jobs.idx` en tu directorio.
-
-### 3\. Paso 2: Ejecutar el Motor y la Interfaz
-
-El motor debe estar corriendo en segundo plano para que la interfaz de usuario pueda conectarse a él. Para esto, necesitarás **dos terminales separadas**.
-
-**En la Terminal 1 (Inicia el Motor):**
-
-```bash
-./engine
-```
-
-Verás un mensaje indicando que está esperando peticiones. Deja esta terminal abierta.
-
-**En la Terminal 2 (Inicia la Interfaz de Usuario):**
-
-```bash
-./ui
-```
-
-Ahora puedes interactuar con el menú de búsqueda.
+Para compilar el proyecto debemos correr `make`. Esto compilará todos los archivos del proyecto guardandolos en la carpeta **dist**.
 
 #### Ejemplo de Búsqueda
 
-1.  Inicia la `./ui`.
+1.  Corre dist/main.
 2.  Selecciona la opción `1` para ingresar el primer criterio (ej: `Python`).
 3.  Selecciona la opción `2` para ingresar el segundo criterio (ej: `AWS`).
 4.  Selecciona la opción `4` para realizar la búsqueda.
 5.  Los resultados que cumplen con **ambos** criterios se mostrarán en pantalla.
 6.  Selecciona la opción `5` para salir.
-
-## Licencia
-
-Este proyecto está bajo la Licencia MIT. Consulta el archivo `LICENSE` para más detalles.
