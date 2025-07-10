@@ -5,13 +5,114 @@
 #include <fcntl.h>
 #include <time.h>
 #include "utils.h"
+#include <arpa/inet.h>
+#include <signal.h>
 
-#define QUERY_PIPE "/tmp/job_query_pipe"
-#define RESULT_PIPE "/tmp/job_result_pipe"
+#define PORT 5050
+#define BUFFER_SIZE 1024
+/**
+ * Server IP address
+ * 127.0.0.1 is localhost
+ * Change this to the server's IP address
+ */
+#define HOST "127.0.0.1"
 
-void clean_stdin();
+int serverFd = -1;
 
-int main() {
+void clean_stdin() {
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF);
+}
+
+void cleanup(int signal)
+{
+    printf("\nSeñal %d recibida\n", signal);
+    close(serverFd);
+    exit(0);
+}
+
+int main(void) {
+    int check;
+
+    // Usar señales para cerrar el servidor
+    struct sigaction sa;
+    sa.sa_handler = cleanup;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    // Configurar manejo de SIGINT (Ctrl+C)
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
+        perror("Error al configurar SIGINT");
+        exit(1);
+    }
+
+    // Configurar manejo de SIGTERM
+    if (sigaction(SIGTERM, &sa, NULL) == -1) {
+        perror("Error al configurar SIGTERM");
+        exit(1);
+    }
+
+    printf("Iniciando cliente en %s:%d\n", HOST, PORT);
+
+    struct sockaddr_in server;
+    
+    // Creando descriptor de archivo del socket
+    serverFd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (serverFd < 0)
+    {
+        perror("Error al crear el socket");
+        exit(1);
+    }
+
+    int opt = 1;
+
+    // Permite reutilizar el socket
+    check = setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    if (check < 0)
+    {
+        perror("Error al configurar el socket");
+        close(serverFd);
+        exit(1);
+    }
+
+    // Configurar el servidor
+    server.sin_port = htons(PORT);
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = inet_addr(HOST);
+
+    // Conectar al servidor
+    check = connect(serverFd, (struct sockaddr *)&server, sizeof(server));
+
+    if (check < 0)
+    {
+        perror("Error al conectar con el servidor");
+        close(serverFd);
+        exit(1);
+    }
+
+    printf("Conectado al servidor en %s:%d\n", HOST, PORT);
+
+    char buffer[BUFFER_SIZE] = {0};
+
+    // Recibir respuesta del servidor
+    check = recv(serverFd, buffer, BUFFER_SIZE, 0);
+
+    if (check <= 0)
+    {
+        if (check == 0) {
+            printf("El servidor ha cerrado la conexión\n");
+        } else {
+            perror("Error al recibir la respuesta");
+        }
+        close(serverFd);
+        exit(1);
+    }
+    
+    buffer[check] = '\0'; // 0 al final
+    printf("Respuesta del servidor: %s\n", buffer);
+
     char* criteria[3] = {NULL, NULL, NULL};
     int choice;
 
@@ -47,7 +148,7 @@ int main() {
             }
             criteria[index] = strdup(buffer);
         } else if (choice == 4) {
-            char query_string[1024] = "";
+            char query_string[BUFFER_SIZE] = "";
             int first = 1;
             for (int i = 0; i < 3; i++) {
                 if (criteria[i] != NULL && strlen(criteria[i]) > 0) {
@@ -69,19 +170,17 @@ int main() {
             clock_gettime(CLOCK_MONOTONIC, &start_time);
             
             // Enviar la consulta al motor
-            int query_fd = open(QUERY_PIPE, O_WRONLY);
-            if (write(query_fd, query_string, strlen(query_string)) == -1) {
+            check = send(serverFd, query_string, strlen(query_string), 0);
+
+            if (check < 0) {
                 perror("Error al enviar la consulta al motor");
-                close(query_fd);
+                close(serverFd);
                 continue;
             }
-            close(query_fd);
 
             // Recibir respuesta
             char result_buffer[8192];
-            int result_fd = open(RESULT_PIPE, O_RDONLY);
-            ssize_t bytes_read = read(result_fd, result_buffer, sizeof(result_buffer) - 1);
-            close(result_fd);
+            ssize_t bytes_read = recv(serverFd, result_buffer, sizeof(result_buffer) - 1, 0);
             
             // Calcular tiempo transcurrido
             clock_gettime(CLOCK_MONOTONIC, &end_time);
@@ -110,11 +209,12 @@ int main() {
     for (int i = 0; i < 3; i++) {
         if (criteria[i]) free(criteria[i]);
     }
+
     printf("Saliendo... ¡Adiós!\n");
-    return 0;
+
+    // Cerrar el socket
+    close(serverFd);
+    exit(0);
 }
 
-void clean_stdin() {
-    int c;
-    while ((c = getchar()) != '\n' && c != EOF);
-}
+

@@ -2,15 +2,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 
+#define PORT 5050
+#define BUFFER_SIZE 1024
+#define HOST "127.0.0.1" // Should always be localhost
+#define BACKLOG 8
 #define SKILL_DIR_FILE "dist/jobs.skl"
 #define INDEX_FILE "dist/jobs.idx"
-#define QUERY_PIPE "/tmp/job_query_pipe"
-#define RESULT_PIPE "/tmp/job_result_pipe"
+
+int serverFd = -1;
+int clientFd = -1;
 
 // Estructura para guardar metadatos de un criterio de búsqueda
 typedef struct {
@@ -19,36 +25,7 @@ typedef struct {
     long offset;
 } Criterion;
 
-// Prototipos
-int find_skill_metadata(FILE* skl_file, const char* skill, Criterion* meta);
-void search_and_respond(int query_fd, int result_fd);
-void cleanup(int signum);
-int compare_criteria(const void* a, const void* b);
 
-int main() {
-    printf("Motor de búsqueda iniciando (modo de memoria mínima)...\n");
-    signal(SIGINT, cleanup);
-
-    // No se carga nada en memoria al inicio.
-    
-    umask(0);
-    mkfifo(QUERY_PIPE, 0666);
-    mkfifo(RESULT_PIPE, 0666);
-    printf("Tuberías creadas. Esperando peticiones...\n");
-
-    while (1) {
-        int query_fd = open(QUERY_PIPE, O_RDONLY);
-        int result_fd = open(RESULT_PIPE, O_WRONLY);
-        if (query_fd == -1 || result_fd == -1) {
-            perror("Error al abrir las tuberías");
-            exit(EXIT_FAILURE);
-        }
-        search_and_respond(query_fd, result_fd);
-        close(query_fd);
-        close(result_fd);
-    }
-    return 0;
-}
 
 // Realiza búsqueda binaria en el archivo .skl para encontrar metadata.
 int find_skill_metadata(FILE* skl_file, const char* skill, Criterion* meta) {
@@ -107,8 +84,7 @@ int compare_criteria(const void* a, const void* b) {
 /**
  * Procesa una consulta de búsqueda y devuelve los resultados a través de un pipe.
  * 
- * @param query_fd  Descriptor de archivo del pipe de entrada para leer la consulta
- * @param result_fd Descriptor de archivo del pipe de salida para escribir los resultados
+ * @param client_fd  Descriptor de archivo del pipe de entrada para leer la consulta
  * 
  * La función realiza los siguientes pasos:
  * 1. Recibe y parsea la consulta del usuario
@@ -120,17 +96,10 @@ int compare_criteria(const void* a, const void* b) {
  * @note La función asume que los archivos de índice (jobs.skl y jobs.idx) existen
  *       y están correctamente formateados.
  */
-void search_and_respond(int query_fd, int result_fd) {
-    // 1. LECTURA DE LA CONSULTA
-    char query_buffer[1024];
-    // Leer la consulta del pipe de entrada
-    ssize_t bytes_read = read(query_fd, query_buffer, sizeof(query_buffer) - 1);
-    if (bytes_read <= 0) return;  // Salir si hay error o cierre de conexión
-    query_buffer[bytes_read] = '\0';  // Asegurar terminación de cadena
+void search_and_respond(int client_fd, char* query_buffer) {
+    int check;
     
-    // Registrar la consulta recibida
-    printf("Petición recibida: '%s'\n", query_buffer);
-
+    // 1. LECTURA DE LA CONSULTA
     char* tokens[3];
     int n_criteria = 0;
     char* token = strtok(query_buffer, ";");
@@ -144,8 +113,11 @@ void search_and_respond(int query_fd, int result_fd) {
     }
 
     // Si no hay criterios, devolvemos NA
-    if (n_criteria == 0) { 
-        if (write(result_fd, "NA", 2) == -1) perror("Error al escribir en el pipe de resultados"); 
+    if (n_criteria == 0) {
+        check = send(client_fd, "NA", 2, 0);
+        
+        if (check < 0) perror("Error al enviar el mensaje");
+        
         return; 
     }
 
@@ -157,7 +129,11 @@ void search_and_respond(int query_fd, int result_fd) {
     FILE* skl_file = fopen(SKILL_DIR_FILE, "rb");
     if (!skl_file) { 
         // Si no se puede abrir el archivo, responder con error
-        if (write(result_fd, "NA", 2) == -1) perror("Error al escribir en el pipe de resultados"); 
+
+        check = send(client_fd, "NA", 2, 0);
+
+        if (check < 0) perror("Error al enviar el mensaje");
+
         return; 
     }
 
@@ -167,13 +143,17 @@ void search_and_respond(int query_fd, int result_fd) {
         // Buscar los metadatos de la habilidad en el archivo .skl
         if (!find_skill_metadata(skl_file, tokens[i], &criteria[i])) {
             // Si no se encuentra la habilidad, responder con error
-            if (write(result_fd, "NA", 2) == -1) perror("Error al escribir en el pipe de resultados");
+            check = send(client_fd, "NA", 2, 0);
+
+            if (check < 0) perror("Error al enviar el mensaje");
+
             fclose(skl_file);
             // Liberar memoria de habilidades ya encontradas
             for(int j = 0; j < i; j++) free(criteria[j].skill);
             return;
         }
     }
+
     fclose(skl_file);
     
     // 5. OPTIMIZACIÓN: Ordenar criterios por frecuencia (menos frecuentes primero)
@@ -187,12 +167,15 @@ void search_and_respond(int query_fd, int result_fd) {
     // 6.1 Cargar la primera lista de offsets (la más corta) en memoria
     // Esto optimiza la intersección al reducir el espacio de búsqueda inicial
     long* intersection_buffer = malloc(criteria[0].count * sizeof(long));
+    
     fseek(idx_file, criteria[0].offset, SEEK_SET);
+    
     if (fread(intersection_buffer, sizeof(long), criteria[0].count, idx_file) != criteria[0].count) {
         perror("Error al leer los datos de intersección");
         free(intersection_buffer);
         return;
     }
+
     size_t intersection_size = criteria[0].count;
 
     // 6.2 Procesar cada criterio adicional
@@ -203,7 +186,9 @@ void search_and_respond(int query_fd, int result_fd) {
 
         // Cargar la siguiente lista de offsets a comparar
         long* next_list_buffer = malloc(criteria[i].count * sizeof(long));
+        
         fseek(idx_file, criteria[i].offset, SEEK_SET);
+        
         if (fread(next_list_buffer, sizeof(long), criteria[i].count, idx_file) != criteria[i].count) {
             perror("Error al leer la siguiente lista de offsets");
             free(next_list_buffer);
@@ -240,14 +225,15 @@ void search_and_respond(int query_fd, int result_fd) {
         intersection_buffer = new_intersection_buffer;
         intersection_size = new_size;
     }
+
     fclose(idx_file);  // Cerrar archivo de índices
 
     // 7. CONSTRUCCIÓN DE LA RESPUESTA
     if (intersection_size == 0) {
         // 7.1 Caso: No hay resultados de búsqueda
-        if (write(result_fd, "NA", 2) == -1) {
-            perror("Error al escribir en el pipe de resultados");
-        }
+        check = send(client_fd, "NA", 2, 0);
+
+        if (check < 0) perror("Error al enviar el mensaje");
     } else {
         // 7.2 Caso: Hay resultados
         char final_response[8192] = "";  // Buffer para la respuesta final
@@ -276,9 +262,9 @@ void search_and_respond(int query_fd, int result_fd) {
         fclose(csv_file);
         
         // 7.3 Enviar la respuesta a través del pipe de salida
-        if (write(result_fd, final_response, strlen(final_response)) == -1) {
-            perror("Error al escribir la respuesta final");
-        }
+        check = send(client_fd, final_response, strlen(final_response), 0);
+
+        if (check < 0) perror("Error al enviar el mensaje");
     }
 
     // 8. LIMPIEZA
@@ -295,8 +281,152 @@ void search_and_respond(int query_fd, int result_fd) {
 void cleanup(int signum) {
     (void)signum;
     printf("\nCerrando el motor de búsqueda...\n");
-    unlink(QUERY_PIPE);
-    unlink(RESULT_PIPE);
+    close(serverFd);
     printf("Recursos liberados. Adiós.\n");
+    exit(0);
+}
+
+/**
+ * Motor de búsqueda con sockets
+ *
+ * Recibe una consulta, devuelve un mensaje y recibe otro
+ */
+ int main(void) {
+    printf("Motor de búsqueda iniciando (modo de memoria mínima)...\n");
+    signal(SIGINT, cleanup);
+
+    // No se carga nada en memoria al inicio.
+    
+    int check;
+
+    // Usar señales para cerrar el servidor
+    struct sigaction sa;
+    sa.sa_handler = cleanup;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    // Configurar manejo de SIGINT (Ctrl+C)
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
+        perror("Error al configurar SIGINT");
+        exit(1);
+    }
+
+    // Configurar manejo de SIGTERM
+    if (sigaction(SIGTERM, &sa, NULL) == -1) {
+        perror("Error al configurar SIGTERM");
+        exit(1);
+    }
+
+    printf("Iniciando servidor en %s:%d\n", HOST, PORT);
+    
+    struct sockaddr_in server, client;
+    // Creando descriptor de archivo del socket
+    serverFd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (serverFd < 0)
+    {
+        perror("Error al crear el socket");
+        exit(1);
+    }
+
+    int opt = 1;
+
+    // Permite reutilizar el socket
+    check = setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    if (check < 0)
+    {
+        perror("Error al configurar el socket");
+        close(serverFd);
+        exit(1);
+    }
+
+    // Configurar el servidor
+    server.sin_port = htons(PORT);
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = INADDR_ANY;
+    bzero(server.sin_zero, 8);
+
+    // Enlace del socket con el puerto
+    check = bind(serverFd, (struct sockaddr *)&server, sizeof(struct sockaddr_in));
+    
+    if (check < 0)
+    {
+        perror("Error al enlazar el socket");
+        close(serverFd);
+        exit(1);
+    }
+
+    // Escuchando por conexiones entrantes
+    check = listen(serverFd, BACKLOG);
+    
+    if (check < 0)
+    {
+        perror("Error al escuchar");
+        close(serverFd);
+        exit(1);
+    }
+
+    printf("Escuchando por conexiones entrantes\n");
+
+    while (1)
+    {
+        // Aceptar una conexión
+        socklen_t clientLen = sizeof(struct sockaddr_in);
+        clientFd = accept(serverFd, (struct sockaddr *)&client, &clientLen);
+
+        if (clientFd < 0)
+        {
+            perror("Error al aceptar la conexión");
+            close(serverFd);
+            exit(1);
+        }
+
+        printf("Conectado a un cliente\n");
+
+        char *message = "Motor listo, recibiendo peticiones...";
+
+        // Enviando mensaje al cliente
+        check = send(clientFd, message, BUFFER_SIZE - 1, 0);
+
+        if (check < 0)
+        {
+            perror("Error al enviar el mensaje");
+            close(clientFd);
+
+            continue;
+        }
+
+        printf("Mensaje de bienvenida enviado al cliente\n");
+
+        while (1) {
+            // Leer la consulta del pipe de entrada
+            char query_buffer[BUFFER_SIZE];
+            
+            check = recv(clientFd, query_buffer, BUFFER_SIZE, 0);
+
+            if (check <= 0)
+            {
+                if (check == 0) printf("Cliente desconectado\n");
+                else perror("Error al recibir el mensaje");
+
+                close(clientFd);
+
+                break;
+            }
+            
+            query_buffer[check] = '\0'; // 0 al final
+            
+            // Registrar la consulta recibida
+            printf("Petición recibida: '%s'\n", query_buffer);
+    
+            // Procesar la consulta
+            search_and_respond(clientFd, query_buffer);
+        }
+    }
+
+    // Cerrar los sockets
+    close(clientFd);
+    close(serverFd);
     exit(0);
 }
